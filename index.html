@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Crossy Flamingo</title>
+  <style>
+    body { margin: 0; background: #87CEEB; overflow: hidden; }
+    canvas { display: block; margin: 0 auto; background: #5fbf6f; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+canvas.width = 400;
+canvas.height = 600;
+
+const GRID = 40;
+const COLS = canvas.width / GRID;
+const ROWS = canvas.height / GRID;
+
+let offsetY = 0;
+let score = 0;
+
+const player = {
+  x: Math.floor(COLS / 2),
+  y: 14
+};
+
+const lanes = [];
+
+// --- generate lane ---
+function createLane(y) {
+  const type = Math.random() < 0.6 ? "road" : "safe";
+
+  const lane = {
+    y,
+    type,
+    speed: type === "road" ? (Math.random() * 2 + 1) : 0,
+    dir: Math.random() < 0.5 ? -1 : 1,
+    cars: []
+  };
+
+  if (type === "road") {
+    const count = Math.floor(Math.random() * 3) + 1;
+    for (let i = 0; i < count; i++) {
+      lane.cars.push({
+        x: Math.random() * COLS,
+        w: 1
+      });
+    }
+  }
+
+  return lane;
+}
+
+// init world
+for (let i = 0; i < 30; i++) {
+  lanes.push(createLane(i));
+}
+
+// input
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp") player.y -= 1;
+  if (e.key === "ArrowDown") player.y += 1;
+  if (e.key === "ArrowLeft") player.x -= 1;
+  if (e.key === "ArrowRight") player.x += 1;
+});
+
+// collision
+function checkCollision(lane) {
+  if (lane.type !== "road") return false;
+
+  for (let car of lane.cars) {
+    if (Math.floor(car.x) === player.x) return true;
+  }
+  return false;
+}
+
+// update
+function update() {
+  // extend world
+  const maxY = Math.max(...lanes.map(l => l.y));
+  if (player.y < maxY - 10) {
+    lanes.push(createLane(maxY + 1));
+  }
+
+  // move cars
+  for (let lane of lanes) {
+    if (lane.type === "road") {
+      for (let car of lane.cars) {
+        car.x += lane.speed * lane.dir * 0.02;
+        if (car.x < 0) car.x = COLS;
+        if (car.x > COLS) car.x = 0;
+      }
+    }
+  }
+
+  // check lane under player
+  const lane = lanes.find(l => l.y === player.y);
+  if (lane && checkCollision(lane)) {
+    alert("💥 Game Over! Score: " + score);
+    location.reload();
+  }
+
+  // score
+  score = Math.max(score, -player.y);
+}
+
+// draw flamingo
+function drawPlayer() {
+  ctx.fillStyle = "pink";
+  ctx.fillRect(player.x * GRID, player.y * GRID, GRID, GRID);
+}
+
+// draw world
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let lane of lanes) {
+    const y = lane.y * GRID;
+
+    ctx.fillStyle = lane.type === "road" ? "#444" : "#6b8e23";
+    ctx.fillRect(0, y, canvas.width, GRID);
+
+    if (lane.type === "road") {
+      ctx.fillStyle = "white";
+      for (let car of lane.cars) {
+        ctx.fillRect(car.x * GRID, y, GRID, GRID);
+      }
+    }
+  }
+
+  drawPlayer();
+
+  ctx.fillStyle = "black";
+  ctx.fillText("Score: " + score, 10, 20);
+}
+
+// loop
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
