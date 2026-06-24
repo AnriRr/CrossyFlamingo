@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Crossy Flamingo</title>
+  <title>Crossy Flamingo - Isometric</title>
   <style>
     body { margin: 0; background: #87CEEB; overflow: hidden; }
-    canvas { display: block; margin: 0 auto; background: #5fbf6f; }
+    canvas { display: block; margin: auto; background: #78c27a; }
   </style>
 </head>
 <body>
@@ -14,50 +14,63 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-canvas.width = 400;
-canvas.height = 600;
+canvas.width = 500;
+canvas.height = 700;
 
+// --- isometric settings ---
 const GRID = 40;
-const COLS = canvas.width / GRID;
-const ROWS = canvas.height / GRID;
+const COLS = 10;
+const ROWS = 20;
 
-let offsetY = 0;
 let score = 0;
 
 const player = {
-  x: Math.floor(COLS / 2),
-  y: 14
+  x: 5,
+  y: 15
 };
 
 const lanes = [];
 
-// --- generate lane ---
+function iso(x, y) {
+  // fake 3D projection
+  return {
+    x: (x - y) * (GRID / 2) + canvas.width / 2,
+    y: (x + y) * (GRID / 4) + 100
+  };
+}
+
+// --- lane types ---
 function createLane(y) {
-  const type = Math.random() < 0.6 ? "road" : "safe";
+  const rand = Math.random();
+
+  let type = "road";
+  if (rand < 0.3) type = "safe";
+  else if (rand < 0.6) type = "road";
+  else type = "construction";
 
   const lane = {
     y,
     type,
-    speed: type === "road" ? (Math.random() * 2 + 1) : 0,
+    speed: (Math.random() * 1.5 + 0.5),
     dir: Math.random() < 0.5 ? -1 : 1,
-    cars: []
+    objs: []
   };
 
   if (type === "road") {
-    const count = Math.floor(Math.random() * 3) + 1;
-    for (let i = 0; i < count; i++) {
-      lane.cars.push({
-        x: Math.random() * COLS,
-        w: 1
-      });
+    for (let i = 0; i < 2; i++) {
+      lane.objs.push({ x: Math.random() * COLS });
     }
+  }
+
+  if (type === "construction") {
+    lane.objs.push({ x: Math.floor(Math.random() * COLS) });
   }
 
   return lane;
 }
 
 // init world
-for (let i = 0; i < 30; i++) {
+for (let i = 0; i < 40; i++) {
   lanes.push(createLane(i));
 }
 
@@ -70,76 +83,124 @@ document.addEventListener("keydown", (e) => {
 });
 
 // collision
-function checkCollision(lane) {
-  if (lane.type !== "road") return false;
+function collide(lane) {
+  if (!lane) return false;
 
-  for (let car of lane.cars) {
-    if (Math.floor(car.x) === player.x) return true;
+  for (let o of lane.objs) {
+    if (lane.type === "road") {
+      if (Math.floor(o.x) === player.x) return true;
+    }
+    if (lane.type === "construction") {
+      if (o.x === player.x) return true;
+    }
   }
   return false;
 }
 
-// update
+// update world
 function update() {
-  // extend world
   const maxY = Math.max(...lanes.map(l => l.y));
+
   if (player.y < maxY - 10) {
     lanes.push(createLane(maxY + 1));
   }
 
-  // move cars
   for (let lane of lanes) {
     if (lane.type === "road") {
-      for (let car of lane.cars) {
-        car.x += lane.speed * lane.dir * 0.02;
-        if (car.x < 0) car.x = COLS;
-        if (car.x > COLS) car.x = 0;
+      for (let o of lane.objs) {
+        o.x += lane.speed * lane.dir * 0.02;
+        if (o.x < 0) o.x = COLS;
+        if (o.x > COLS) o.x = 0;
       }
     }
   }
 
-  // check lane under player
   const lane = lanes.find(l => l.y === player.y);
-  if (lane && checkCollision(lane)) {
+
+  if (collide(lane)) {
     alert("💥 Game Over! Score: " + score);
     location.reload();
   }
 
-  // score
   score = Math.max(score, -player.y);
+
+  // 🇦🇱 PRIME MINISTER EVENT (chaos mechanic)
+  if (Math.random() < 0.005) {
+    for (let i = 0; i < 3; i++) {
+      lanes.push(createLane(maxY + i));
+    }
+  }
 }
 
 // draw flamingo
-function drawPlayer() {
-  ctx.fillStyle = "pink";
-  ctx.fillRect(player.x * GRID, player.y * GRID, GRID, GRID);
+function drawFlamingo(p) {
+  const pos = iso(p.x, p.y);
+
+  // body
+  ctx.fillStyle = "hotpink";
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y - 10, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // neck
+  ctx.fillRect(pos.x + 5, pos.y - 25, 3, 15);
+
+  // head
+  ctx.beginPath();
+  ctx.arc(pos.x + 6, pos.y - 28, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // legs
+  ctx.strokeStyle = "#ff69b4";
+  ctx.beginPath();
+  ctx.moveTo(pos.x - 3, pos.y);
+  ctx.lineTo(pos.x - 5, pos.y + 15);
+  ctx.moveTo(pos.x + 3, pos.y);
+  ctx.lineTo(pos.x + 5, pos.y + 15);
+  ctx.stroke();
 }
 
 // draw world
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // sort for depth illusion
+  lanes.sort((a,b) => a.y - b.y);
+
   for (let lane of lanes) {
-    const y = lane.y * GRID;
+    for (let x = 0; x < COLS; x++) {
+      const p = iso(x, lane.y);
 
-    ctx.fillStyle = lane.type === "road" ? "#444" : "#6b8e23";
-    ctx.fillRect(0, y, canvas.width, GRID);
+      // lane base
+      if (lane.type === "road") ctx.fillStyle = "#444";
+      else if (lane.type === "construction") ctx.fillStyle = "#b5651d";
+      else ctx.fillStyle = "#6b8e23";
 
-    if (lane.type === "road") {
-      ctx.fillStyle = "white";
-      for (let car of lane.cars) {
-        ctx.fillRect(car.x * GRID, y, GRID, GRID);
+      ctx.fillRect(p.x, p.y, GRID/2, GRID/4);
+
+      // obstacles
+      for (let o of lane.objs) {
+        if (lane.type === "road") {
+          const op = iso(o.x, lane.y);
+          ctx.fillStyle = "white";
+          ctx.fillRect(op.x, op.y, GRID/2, GRID/4);
+        }
+
+        if (lane.type === "construction") {
+          const op = iso(o.x, lane.y);
+          ctx.fillStyle = "gray";
+          ctx.fillRect(op.x, op.y, GRID/2, GRID/2);
+        }
       }
     }
   }
 
-  drawPlayer();
+  drawFlamingo(player);
 
   ctx.fillStyle = "black";
-  ctx.fillText("Score: " + score, 10, 20);
+  ctx.fillText("Score: " + score, 20, 30);
 }
 
-// loop
 function loop() {
   update();
   draw();
