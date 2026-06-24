@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>🦩 Crossy Flamingo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Game Canvas -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- HUD (visible during gameplay) -->
+  <div id="hud" class="hidden">
+    <div id="scoreDisplay" class="hud-pill">🦩 0m</div>
+    <div id="eraDisplay" class="hud-era">🌿 Pristine Wetlands</div>
+  </div>
+
+  <!-- Prime Minister Mode Banner -->
+  <div id="pmBanner" class="hidden">
+    🏗️ PRIME MINISTER MODE! 🏗️
+    <span class="pm-sub">Construction sites incoming!</span>
+  </div>
+
+  <!-- Collectible Popup -->
+  <div id="collectiblePopup" class="hidden">
+    <strong id="collectibleTitle"></strong>
+    <em id="collectibleDesc"></em>
+  </div>
+
+  <!-- Mobile hint -->
+  <div id="mobileHint" class="hidden">Tap to hop · Swipe left/right to dodge</div>
+
+  <!-- ===================== SCREENS ===================== -->
+
+  <!-- Main Menu Screen -->
+  <div id="menuScreen" class="screen active">
+    <div class="screen-inner">
+      <h1 class="game-title">🦩 Crossy Flamingo</h1>
+      <p class="tagline">"How many roads, resorts, and promises can a flamingo cross before the lagoon disappears?"</p>
+
+      <div class="section-label">Choose your flamingo</div>
+      <div id="charSelector" class="char-grid">
+        <button class="char-btn selected" data-char="0">🦩<span>Classic</span></button>
+        <button class="char-btn" data-char="1">😤🦩<span>Angry</span></button>
+        <button class="char-btn" data-char="2">🦩✨<span>Golden</span></button>
+        <button class="char-btn" data-char="3">🦩🇪🇺<span>EU Inspector</span></button>
+        <button class="char-btn" data-char="4">🦩📸<span>Journalist</span></button>
+        <button class="char-btn" data-char="5">🦩✊<span>Protest</span></button>
+        <button class="char-btn" data-char="6">🦅<span>Eagle</span></button>
+      </div>
+
+      <button id="startBtn" class="btn btn-primary">🌊 Start Crossing</button>
+    </div>
+  </div>
+
+  <!-- Game Over Screen -->
+  <div id="gameoverScreen" class="screen hidden">
+    <div class="screen-inner">
+      <h2 class="gameover-title">🦩 Flamingo Down!</h2>
+
+      <div id="deathReason" class="death-reason"></div>
+
+      <div class="stats-block" id="statsBlock"></div>
+
+      <div class="leaderboard">
+        <h3 class="lb-title">🏆 Hall of Fame</h3>
+        <div id="lbEntries"></div>
+      </div>
+
+      <div class="gameover-actions">
+        <button id="restartBtn" class="btn btn-primary">🔄 Cross Again</button>
+        <button id="backMenuBtn" class="btn btn-secondary">🏠 Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
