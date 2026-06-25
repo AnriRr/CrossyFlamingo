@@ -1028,13 +1028,13 @@ class Game {
     const H   = this.rnd.H;
     const W   = this.rnd.W;
 
-    // Isometric-style perspective: shear Y axis so the right side of the screen
-    // appears higher (further away). This is ctx.transform(a,b,c,d,e,f) where:
-    //   a=1, b=SKEW (y shifts up as x increases), c=0, d=1
-    //   e=0, f=-SKEW*W*0.5 (re-center so middle of screen stays put)
-    const SKEW = 0.20;
+    // Viewing from the right looking left:
+    // left side of screen = far = higher, right side = near = lower.
+    // b = +SKEW shifts y DOWN as x increases (right side drops, left side rises).
+    // f = -SKEW*W*0.5 re-centers so the middle of the screen stays put.
+    const SKEW = 0.22;
     ctx.save();
-    ctx.transform(1, -SKEW, 0, 1, 0, SKEW * W * 0.5);
+    ctx.transform(1, SKEW, 0, 1, 0, -SKEW * W * 0.5);
 
     const sorted = [...this.wld.lanes].sort((a,b) => b.worldRow - a.worldRow);
     sorted.forEach(lane => {
