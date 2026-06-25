@@ -27,6 +27,11 @@ const CFG = {
   HOP_PX_SPEED: 900,
   HOP_HEIGHT:   56,
 
+  // Perspective skew — shared between _draw transform and player movement
+  // ctx.transform(1, SKEW, 0, 1, 0, -SKEW*W*0.5): right side of screen drops,
+  // left side rises. Viewing from right, looking left.
+  SKEW: 0.22,
+
   // World
   ROWS_ABOVE:  14,
   ROWS_BELOW:  5,
@@ -278,23 +283,27 @@ class Player {
 
     const laneStep = CFG.LANE_H + CFG.LANE_DEPTH;
 
-    // Left/right: move one integer column, convert to exact pixel
     if (dir === 'left' || dir === 'right') {
+      // Left/right: move one integer column
       const newCol = clamp(this.col + (dir === 'left' ? -1 : 1), 0, CFG.COLS - 1);
-      if (newCol === this.col) return;   // already at edge
-      this.col = newCol;
+      if (newCol === this.col) return;
+      this.col  = newCol;
       this.tpx  = this._colToPx(newCol, W);
       this.trow = this.row;
-      const dpx = this.tpx - this.px;
-      this.hopPixels = Math.abs(dpx) || laneStep;
+      this.hopPixels = Math.abs(this.tpx - this.px) || laneStep;
       this.hopDir = dir === 'left' ? -1 : 1;
     } else {
-      // Up/down: move one row
+      // Forward/backward: move one row AND shift px to follow the skewed grid.
+      // Under skew transform, each row step appears to move up-left on screen,
+      // so px shifts left by SKEW * laneStep to stay on the visual grid diagonal.
       const drow = dir === 'up' ? 1 : -1;
-      this.tpx  = this.px;
+      const dpx  = -CFG.SKEW * laneStep * drow;   // negative = left when going forward
+      this.tpx  = clamp(this.px + dpx, 0, W);
       this.trow = this.row + drow;
       this.hopPixels = laneStep;
       this.hopDir = 0;
+      // Update col to stay in sync with new px
+      this.col = clamp(Math.round((this.tpx / W) * CFG.COLS - 0.5), 0, CFG.COLS - 1);
     }
 
     this.startPx    = this.px;
@@ -413,7 +422,7 @@ class Renderer {
     const H   = CFG.LANE_H;
     const D   = CFG.LANE_DEPTH;
     // Extend beyond canvas edges to fill screen after the skew transform
-    const SKEW = 0.20;
+    const SKEW = CFG.SKEW;
     const OVR  = Math.ceil(SKEW * this.H) + 20;
 
     if (topY > this.H + H + D) return;
@@ -481,163 +490,235 @@ class Renderer {
     }
   }
 
-  /* ── Obstacle block ─────────────────────────────────── */
-  _drawOb(ob, lane, topY, H) {
-    const ctx = this.ctx;
-    const cx  = ob.frac * this.W;
-    const obW = (OB_W[lane.obType]||1.4) * H;
-    const obH = H * 0.82;
-    const D   = CFG.LANE_DEPTH;
+  /* ── 3D voxel helpers ───────────────────────────────── */
+  // Draw a 3D box at (cx, cy) in pre-skew world space.
+  // w = width, h = height of top face, d = depth (front face height)
+  // topColor, frontColor, sideColor
+  _box(ctx, x, y, w, h, d, topC, frontC, sideC) {
+    // Top face
+    ctx.fillStyle = topC;
+    ctx.fillRect(x, y, w, h);
+    // Front face (below top face)
+    ctx.fillStyle = frontC;
+    ctx.fillRect(x, y + h, w, d);
+    // Right side face (thin strip on right edge)
+    if (sideC) {
+      ctx.fillStyle = sideC;
+      ctx.fillRect(x + w, y, 6, h + d);
+    }
+  }
 
-    // Bounding box relative to (cx, topY + H/2)
-    const x0 = cx - obW/2;
-    const y0 = topY + (H - obH)/2;
+  /* ── Obstacle drawing ───────────────────────────────── */
+  _drawOb(ob, lane, topY, H) {
+    const ctx  = this.ctx;
+    const W    = this.W;
+    const cx   = ob.frac * W;
+    const obW  = (OB_W[lane.obType] || 1.4) * H;
+    const D    = Math.round(H * 0.38);   // front face depth (3D thickness)
+
+    // Obstacle sits on top of the lane — top face center aligned to lane center
+    const obTop  = topY + H * 0.08;
+    const obH    = H * 0.72;
 
     ctx.save();
-    ctx.translate(cx, topY + H/2);
-    if (lane.dir < 0) ctx.scale(-1,1);
+    ctx.translate(cx, 0);
+    if (lane.dir < 0) ctx.scale(-1, 1);
 
-    const w = obW, h = obH;
-
-    // Side face (block depth below obstacle)
-    ctx.fillStyle='rgba(0,0,0,0.32)';
-    ctx.fillRect(-w/2, h/2, w, D*0.7);
-
-    switch(lane.obType) {
-      case 'car': case 'suv':
-        this._car(ctx, w, h, lane.obType==='suv'?'#1a1a2e':'#cc3333'); break;
-      case 'truck':    this._truck(ctx,w,h);     break;
-      case 'bulldozer':this._bulldozer(ctx,w,h); break;
-      case 'crane':    this._crane(ctx,w,h);     break;
-      case 'log':      this._log(ctx,w,h);       break;
-      case 'yacht':    this._yacht(ctx,w,h);     break;
-      case 'fence':    this._fence(ctx,w,h);     break;
+    switch (lane.obType) {
+      case 'car':  this._car3d(ctx, obW, obH, D, topY, H, '#e83333'); break;
+      case 'suv':  this._car3d(ctx, obW, obH, D, topY, H, '#1a1a2e'); break;
+      case 'truck':      this._truck3d(ctx, obW, obH, D, topY, H); break;
+      case 'bulldozer':  this._bulldozer3d(ctx, obW, obH, D, topY, H); break;
+      case 'crane':      this._crane3d(ctx, obW, obH, D, topY, H); break;
+      case 'log':        this._log3d(ctx, obW, obH, D, topY, H); break;
+      case 'yacht':      this._yacht3d(ctx, obW, obH, D, topY, H); break;
+      case 'fence':      this._fence3d(ctx, obW, obH, D, topY, H); break;
       case 'journalist':
-        ctx.font=`${h}px serif`;
-        ctx.textAlign='center'; ctx.textBaseline='middle';
-        ctx.fillText('📸',0,0); break;
-      case 'helicopter':this._heli(ctx,w,h);    break;
+        ctx.font = `${H * 0.8}px serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('📸', 0, topY + H * 0.5);
+        break;
+      case 'helicopter': this._heli3d(ctx, obW, obH, D, topY, H); break;
     }
     ctx.restore();
   }
 
-  _car(ctx,w,h,body) {
-    // Body top face
-    ctx.fillStyle=body;
-    ctx.beginPath(); ctx.roundRect(-w/2,-h/2,w,h,6); ctx.fill();
-    // Side face of car body
-    ctx.fillStyle=darken(body,0.4);
-    ctx.fillRect(-w/2,h/2,w,CFG.LANE_DEPTH*0.5);
+  _car3d(ctx, w, h, d, topY, H, body) {
+    const x = -w/2, y = topY + H*0.1;
+    const bd = darken(body, 0.35), bs = darken(body, 0.55);
+    // Main body — top, front, side
+    this._box(ctx, x, y, w, h*0.55, d, body, bd, bs);
+    // Cabin (raised roof)
+    const cw = w*0.52, cx2 = x + w*0.18;
+    this._box(ctx, cx2, y - h*0.32, cw, h*0.34, d*0.7, lighten(body,0.15), darken(body,0.28), darken(body,0.48));
     // Windscreen
-    ctx.fillStyle='#aaddff';
-    ctx.beginPath(); ctx.roundRect(-w/4,-h/2+4,w/3,h*0.45,3); ctx.fill();
-    // Headlight
-    ctx.fillStyle='#ffe840';
-    ctx.fillRect(w/2-10,-h/5,8,5);
-    // Wheels
-    ctx.fillStyle='#222';
-    for (const wx of [-w/3.5, w/3.5]) {
-      ctx.beginPath(); ctx.arc(wx,h/2-1,h*0.18,0,Math.PI*2); ctx.fill();
-      ctx.strokeStyle='#555'; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(wx,h/2-1,h*0.1,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#aaddff88';
+    ctx.fillRect(cx2 + cw*0.08, y - h*0.28, cw*0.84, h*0.26);
+    // Headlights
+    ctx.fillStyle = '#ffe840';
+    ctx.fillRect(x + w - 8, y + h*0.1, 7, h*0.18);
+    // Wheels — dark blocks
+    ctx.fillStyle = '#1a1a1a';
+    for (const wx of [x + w*0.14, x + w*0.72]) {
+      ctx.fillRect(wx, y + h*0.50, w*0.16, h*0.28 + d);
+    }
+    ctx.fillStyle = '#444';
+    for (const wx of [x + w*0.15, x + w*0.73]) {
+      ctx.fillRect(wx + 2, y + h*0.52, w*0.12, h*0.22);
     }
   }
 
-  _truck(ctx,w,h) {
-    // Cargo
-    ctx.fillStyle='#cc6600';
-    ctx.fillRect(-w/2,-h/2,w*0.62,h);
-    ctx.fillStyle=darken('#cc6600',0.4);
-    ctx.fillRect(-w/2,h/2,w*0.62,CFG.LANE_DEPTH*0.5);
+  _truck3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.08;
+    // Cargo box
+    this._box(ctx, x, y, w*0.65, h, d, '#cc6600', darken('#cc6600',0.38), darken('#cc6600',0.55));
     // Cab
-    ctx.fillStyle='#cc3300';
-    ctx.beginPath(); ctx.roundRect(-w/2+w*0.62,-h/2,w*0.38,h,4); ctx.fill();
-    ctx.fillStyle=darken('#cc3300',0.4);
-    ctx.fillRect(-w/2+w*0.62,h/2,w*0.38,CFG.LANE_DEPTH*0.5);
-    // Windscreen
-    ctx.fillStyle='#88ccff';
-    ctx.fillRect(-w/2+w*0.65,-h/2+5,w*0.3,h*0.45);
+    this._box(ctx, x+w*0.65, y - h*0.15, w*0.35, h*1.15, d, '#cc3300', darken('#cc3300',0.38), darken('#cc3300',0.55));
+    // Cab windscreen
+    ctx.fillStyle = '#88ccff99';
+    ctx.fillRect(x+w*0.67, y - h*0.1, w*0.28, h*0.55);
+    // Headlight
+    ctx.fillStyle = '#ffe840';
+    ctx.fillRect(x+w-10, y+h*0.2, 8, h*0.2);
     // Wheels
-    ctx.fillStyle='#222';
-    for (let i=0;i<4;i++){
-      ctx.beginPath(); ctx.arc(-w/2+10+i*(w-20)/3,h/2,h*0.18,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    for (const wx of [x+w*0.08, x+w*0.35, x+w*0.72]) {
+      ctx.fillRect(wx, y+h*0.72, w*0.14, h*0.28+d);
     }
   }
 
-  _bulldozer(ctx,w,h) {
-    ctx.fillStyle='#ddaa00';
-    ctx.fillRect(-w/2,-h/3,w*0.65,h*0.65);
-    ctx.fillStyle=darken('#ddaa00',0.4);
-    ctx.fillRect(-w/2,h*0.32,w*0.65,CFG.LANE_DEPTH*0.5);
-    ctx.fillStyle='#aa7700';
-    ctx.beginPath(); ctx.roundRect(w/2-w*0.38,-h/2,w*0.38,h,4); ctx.fill();
-    ctx.fillStyle='#666';
-    ctx.fillRect(-w/2,h*0.28,w,h*0.2);
+  _bulldozer3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.12;
+    // Tracks
+    ctx.fillStyle = '#333';
+    ctx.fillRect(x, y+h*0.62, w, h*0.28+d);
+    ctx.fillStyle = '#555';
+    ctx.fillRect(x+2, y+h*0.64, w-4, h*0.24);
+    // Body
+    this._box(ctx, x+w*0.06, y, w*0.58, h*0.72, d, '#ddaa00', darken('#ddaa00',0.38), darken('#ddaa00',0.55));
+    // Cabin
+    this._box(ctx, x+w*0.56, y-h*0.2, w*0.38, h*0.52, d*0.8, '#aa7700', darken('#aa7700',0.38), darken('#aa7700',0.55));
+    // Blade
+    ctx.fillStyle = '#aaaaaa';
+    ctx.fillRect(x-4, y+h*0.1, 10, h*0.5);
+    ctx.fillStyle = '#888';
+    ctx.fillRect(x-4, y+h*0.1+h*0.5, 10, d*0.5);
   }
 
-  _crane(ctx,w,h) {
-    ctx.fillStyle='#dd8800';
-    ctx.fillRect(-w/2,-h/2,w*0.22,h);
-    ctx.fillStyle=darken('#dd8800',0.4);
-    ctx.fillRect(-w/2,h/2,w*0.22,CFG.LANE_DEPTH*0.5);
-    ctx.fillStyle='#ffaa00';
-    ctx.fillRect(-w/4,-h*1.5,w*0.1,h);
-    ctx.strokeStyle='#ff8800'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(-w/4,-h*1.5); ctx.lineTo(w/2,-h/2); ctx.stroke();
-  }
-
-  _log(ctx,w,h) {
-    ctx.fillStyle='#8B5E3C';
-    ctx.beginPath(); ctx.roundRect(-w/2,-h*0.35,w,h*0.68,8); ctx.fill();
-    ctx.fillStyle=darken('#8B5E3C',0.4);
-    ctx.fillRect(-w/2,h*0.33,w,CFG.LANE_DEPTH*0.5);
-    ctx.fillStyle='#a07040';
-    for(let i=0;i<4;i++) ctx.fillRect(-w/2+8+i*(w-16)/3,-h/8,3,h*0.28);
-    // End rings
-    ctx.strokeStyle='#6b4020'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.ellipse(-w/2+5,0,6,h*0.32,0,0,Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.ellipse(w/2-5,0,6,h*0.32,0,0,Math.PI*2); ctx.stroke();
-  }
-
-  _yacht(ctx,w,h) {
-    ctx.fillStyle='#fff';
+  _crane3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.1;
+    // Base vehicle
+    this._box(ctx, x, y+h*0.3, w*0.7, h*0.7, d, '#dd8800', darken('#dd8800',0.38), darken('#dd8800',0.55));
+    // Tower
+    this._box(ctx, x+w*0.1, y-h*1.2, w*0.2, h*1.5, d*0.6, '#ffaa00', darken('#ffaa00',0.35), darken('#ffaa00',0.52));
+    // Arm
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(x+w*0.18, y-h*1.2, w*0.8, h*0.1);
+    ctx.fillStyle = darken('#ffaa00',0.38);
+    ctx.fillRect(x+w*0.18, y-h*1.1, w*0.8, d*0.4);
+    // Cable
+    ctx.strokeStyle = '#888'; ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(-w/2,h/3); ctx.lineTo(w/2,h/3);
-    ctx.lineTo(w/3,-h/3); ctx.lineTo(-w/3,-h/3);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle=darken('#fff',0.3);
-    ctx.fillRect(-w/2,h/3,w,CFG.LANE_DEPTH*0.5);
-    ctx.fillStyle='#cc0000';
-    ctx.fillRect(-w/4,-h/3,w/2,h/5);
-    ctx.strokeStyle='#bbb'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(0,-h/3); ctx.lineTo(0,-h); ctx.stroke();
-    ctx.fillStyle='rgba(200,220,255,0.45)';
-    ctx.beginPath(); ctx.moveTo(0,-h); ctx.lineTo(w/2,-h/3); ctx.lineTo(0,-h/3); ctx.closePath(); ctx.fill();
-  }
-
-  _fence(ctx,w,h) {
-    ctx.fillStyle='rgba(255,170,0,0.25)';
-    ctx.fillRect(-w/2,-h/2,w,h);
-    ctx.strokeStyle='#ffaa00'; ctx.lineWidth=3;
-    ctx.strokeRect(-w/2,-h/2,w,h);
-    ctx.lineWidth=1.5;
-    ctx.beginPath();
-    for(let i=0;i<=w;i+=13){ ctx.moveTo(-w/2+i,-h/2); ctx.lineTo(-w/2+i+10,h/2); }
+    ctx.moveTo(x+w*0.9, y-h*1.15);
+    ctx.lineTo(x+w*0.9, y-h*0.1);
     ctx.stroke();
   }
 
-  _heli(ctx,w,h) {
-    const spin=(this.f*0.22)%(Math.PI*2);
-    ctx.fillStyle='#444';
-    ctx.beginPath(); ctx.ellipse(0,0,w/2,h/3,0,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=darken('#444',0.4);
-    ctx.fillRect(-w/2,h/3,w,CFG.LANE_DEPTH*0.4);
-    ctx.strokeStyle='#888'; ctx.lineWidth=3;
-    ctx.save(); ctx.rotate(spin);
-    ctx.beginPath(); ctx.moveTo(-w/2,0); ctx.lineTo(w/2,0); ctx.stroke();
+  _log3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.2;
+    const brown = '#8B5E3C', bd = darken(brown,0.38), bs = darken(brown,0.52);
+    // Log body
+    this._box(ctx, x, y, w, h*0.6, d, brown, bd, bs);
+    // Bark lines on top
+    ctx.fillStyle = '#a07040';
+    for (let i = 1; i < 4; i++) {
+      ctx.fillRect(x + w*i*0.22, y+2, 3, h*0.56);
+    }
+    // End face (circle approximated as rect with rounded look)
+    ctx.fillStyle = lighten(brown, 0.12);
+    ctx.beginPath();
+    ctx.ellipse(x+8, y+h*0.3, 7, h*0.28, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = darken(brown,0.3); ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.ellipse(x+8, y+h*0.3, 4, h*0.16, 0, 0, Math.PI*2);
+    ctx.stroke();
+  }
+
+  _yacht3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.25;
+    // Hull top
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(x, y+h*0.5); ctx.lineTo(x+w, y+h*0.5);
+    ctx.lineTo(x+w*0.85, y); ctx.lineTo(x+w*0.15, y);
+    ctx.closePath(); ctx.fill();
+    // Hull front face
+    ctx.fillStyle = '#cccccc';
+    ctx.beginPath();
+    ctx.moveTo(x, y+h*0.5); ctx.lineTo(x+w, y+h*0.5);
+    ctx.lineTo(x+w, y+h*0.5+d); ctx.lineTo(x, y+h*0.5+d);
+    ctx.closePath(); ctx.fill();
+    // Cabin
+    this._box(ctx, x+w*0.25, y-h*0.3, w*0.45, h*0.32, d*0.7, '#ddddff', '#aaaacc', '#8888aa');
+    // Mast
+    ctx.strokeStyle = '#aaaaaa'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(x+w*0.5, y-h*0.3); ctx.lineTo(x+w*0.5, y-h*1.1); ctx.stroke();
+    // Sail
+    ctx.fillStyle = 'rgba(220,230,255,0.6)';
+    ctx.beginPath();
+    ctx.moveTo(x+w*0.5, y-h*1.1); ctx.lineTo(x+w*0.88, y-h*0.3); ctx.lineTo(x+w*0.5, y-h*0.3);
+    ctx.closePath(); ctx.fill();
+  }
+
+  _fence3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.1;
+    // Posts
+    ctx.fillStyle = '#cc8800';
+    ctx.fillRect(x, y, w*0.12, h*0.9);
+    ctx.fillRect(x+w*0.44, y, w*0.12, h*0.9);
+    ctx.fillRect(x+w*0.88, y, w*0.12, h*0.9);
+    // Front faces of posts
+    ctx.fillStyle = darken('#cc8800', 0.4);
+    ctx.fillRect(x, y+h*0.9, w*0.12, d*0.6);
+    ctx.fillRect(x+w*0.44, y+h*0.9, w*0.12, d*0.6);
+    ctx.fillRect(x+w*0.88, y+h*0.9, w*0.12, d*0.6);
+    // Rails
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(x, y+h*0.2, w, h*0.1);
+    ctx.fillRect(x, y+h*0.55, w, h*0.1);
+    ctx.fillStyle = darken('#ffaa00',0.3);
+    ctx.fillRect(x, y+h*0.3, w, d*0.3);
+    ctx.fillRect(x, y+h*0.65, w, d*0.3);
+    // Warning stripes
+    ctx.fillStyle = '#000';
+    ctx.globalAlpha = 0.15;
+    for (let i=0; i<w; i+=18) {
+      ctx.fillRect(x+i, y, 9, h*0.9);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  _heli3d(ctx, w, h, d, topY, H) {
+    const x = -w/2, y = topY + H*0.15;
+    const spin = (this.f * 0.22) % (Math.PI * 2);
+    // Body
+    this._box(ctx, x+w*0.15, y+h*0.1, w*0.7, h*0.5, d, '#444', '#222', '#111');
+    // Cockpit bubble
+    ctx.fillStyle = '#88aaff66';
+    ctx.beginPath(); ctx.ellipse(x+w*0.72, y+h*0.28, w*0.18, h*0.28, 0, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#6688cc'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.ellipse(x+w*0.72, y+h*0.28, w*0.18, h*0.28, 0, 0, Math.PI*2); ctx.stroke();
+    // Tail boom
+    ctx.fillStyle = '#555';
+    ctx.fillRect(x, y+h*0.22, w*0.2, h*0.16);
+    // Rotor
+    ctx.save();
+    ctx.translate(x+w*0.5, y+h*0.08);
+    ctx.rotate(spin);
+    ctx.fillStyle = '#888';
+    ctx.fillRect(-w*0.48, -3, w*0.96, 6);
     ctx.restore();
-    ctx.fillStyle='#88aaff';
-    ctx.fillRect(-w/5,-h/4,w/4,h/2);
   }
 
   /* ── Flamingo player ────────────────────────────────── */
@@ -1032,7 +1113,7 @@ class Game {
     // left side of screen = far = higher, right side = near = lower.
     // b = +SKEW shifts y DOWN as x increases (right side drops, left side rises).
     // f = -SKEW*W*0.5 re-centers so the middle of the screen stays put.
-    const SKEW = 0.22;
+    const SKEW = CFG.SKEW;
     ctx.save();
     ctx.transform(1, SKEW, 0, 1, 0, -SKEW * W * 0.5);
 
