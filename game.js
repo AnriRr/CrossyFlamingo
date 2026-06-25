@@ -23,11 +23,6 @@ const CFG = {
   PLAYER_SCREEN_ROW: 3,
   CAMERA_SPEED:      2.5,
 
-  // Perspective: a single ctx skew applied to the whole scene
-  // ctx.transform(1, CAM_SKEW, 0, 1, 0, 0) — skews X by CAM_SKEW per Y pixel
-  // Positive = lean right at bottom (near), lean left at top (far) = front-left view
-  CAM_SKEW: -0.28,
-
   // Hop animation in pixels
   HOP_PX_SPEED: 900,
   HOP_HEIGHT:   56,
@@ -185,10 +180,6 @@ class World {
       }
     }
 
-    if (Math.random()<0.11) {
-      lane.collectible = { frac: rand(0.08, 0.92), collected: false };
-    }
-
     return lane;
   }
 
@@ -254,53 +245,63 @@ class Player {
   constructor() { this.reset(); }
 
   reset() {
-    this.px   = 0;        // set to canvas.width/2 on first frame
-    this.row  = 0;        // world row index
-    this.tpx  = 0;        // target x
-    this.trow = 0;        // target row
-    this.startPx  = 0;
-    this.startRow = 0;
-    this.hopDist  = 1;
-    this.moving   = false;
-    this.alive    = true;
-    this.hop      = 0;    // 0..1 arc factor
-    this.hopDir   = 0;    // -1 left, 0 fwd, 1 right
-    this.squish   = 0;
-    this.pendingFwd = false;
+    this.col  = 4;         // integer grid column (0..COLS-1)
+    this.px   = 0;         // pixel x — derived from col, set by init()
+    this.row  = 0;
+    this.tpx  = 0;
+    this.trow = 0;
+    this.startPx   = 0;
+    this.startRow  = 0;
+    this.hopPixels = 1;
+    this.moving    = false;
+    this.alive     = true;
+    this.hop       = 0;
+    this.hopDir    = 0;
+    this.squish    = 0;
+    this.pendingFwd  = false;
     this.initialized = false;
   }
 
   init(W) {
     if (this.initialized) return;
-    this.px = this.tpx = this.startPx = W / 2;
+    this.px = this.tpx = this._colToPx(this.col, W);
     this.initialized = true;
+  }
+
+  _colToPx(col, W) {
+    // Center of column col, evenly distributed across canvas width
+    return (col + 0.5) * (W / CFG.COLS);
   }
 
   move(dir, W) {
     if (!this.alive || this.moving) return;
 
-    const STEP_X   = W / CFG.COLS;
-    const STEP_ROW = 1;  // one row forward/back
-
-    const dpx  = dir==='left' ? -STEP_X : dir==='right' ? STEP_X : 0;
-    const drow = dir==='up'   ?  STEP_ROW : dir==='down' ? -STEP_ROW : 0;
-
-    this.tpx  = clamp(this.px + dpx, 0, W);
-    this.trow = this.row + drow;
-
-    // Store hop start and total pixel distance for arc progress
-    this.startPx   = this.px;
-    this.startRow  = this.row;
-    // Convert row distance to pixels using laneStep so all hops feel same speed
     const laneStep = CFG.LANE_H + CFG.LANE_DEPTH;
-    const dpxTotal = this.tpx  - this.px;
-    const dRowPx   = (this.trow - this.row) * laneStep;
-    this.hopPixels = Math.sqrt(dpxTotal*dpxTotal + dRowPx*dRowPx) || laneStep;
 
+    // Left/right: move one integer column, convert to exact pixel
+    if (dir === 'left' || dir === 'right') {
+      const newCol = clamp(this.col + (dir === 'left' ? -1 : 1), 0, CFG.COLS - 1);
+      if (newCol === this.col) return;   // already at edge
+      this.col = newCol;
+      this.tpx  = this._colToPx(newCol, W);
+      this.trow = this.row;
+      const dpx = this.tpx - this.px;
+      this.hopPixels = Math.abs(dpx) || laneStep;
+      this.hopDir = dir === 'left' ? -1 : 1;
+    } else {
+      // Up/down: move one row
+      const drow = dir === 'up' ? 1 : -1;
+      this.tpx  = this.px;
+      this.trow = this.row + drow;
+      this.hopPixels = laneStep;
+      this.hopDir = 0;
+    }
+
+    this.startPx    = this.px;
+    this.startRow   = this.row;
     this.moving     = true;
     this.hop        = 0;
-    this.hopDir     = dpx<0 ? -1 : dpx>0 ? 1 : 0;
-    this.pendingFwd = (dir==='up');
+    this.pendingFwd = (dir === 'up');
   }
 
   update(dt) {
@@ -316,7 +317,7 @@ class Player {
       const distPx    = Math.sqrt(dpx*dpx + dRowPx*dRowPx);
 
       if (distPx < speedPx * 1.2 || distPx < 0.5) {
-        this.px     = this.tpx;
+        this.px     = this.tpx;   // snap to exact target — no float drift
         this.row    = this.trow;
         this.moving = false;
         this.hop    = 0;
@@ -344,6 +345,8 @@ class Player {
           const drift = lane.speed * lane.dir * dt;
           this.px  = clamp(this.px  + drift, 0, W);
           this.tpx = clamp(this.tpx + drift, 0, W);
+          // Keep col in sync so next left/right hop starts from correct column
+          this.col = clamp(Math.round(this.px / (W / CFG.COLS) - 0.5), 0, CFG.COLS - 1);
         }
       });
     });
@@ -410,7 +413,8 @@ class Renderer {
     const H   = CFG.LANE_H;
     const D   = CFG.LANE_DEPTH;
     // Extend beyond canvas edges to fill screen after the skew transform
-    const OVR = Math.ceil(Math.abs(CFG.CAM_SKEW) * this.H) + 20;
+    const SKEW = 0.20;
+    const OVR  = Math.ceil(SKEW * this.H) + 20;
 
     if (topY > this.H + H + D) return;
     if (topY + H + D < -H)     return;
@@ -435,15 +439,6 @@ class Renderer {
     }
 
     lane.obs.forEach(ob => this._drawOb(ob, lane, topY, H));
-
-    if (lane.collectible && !lane.collectible.collected) {
-      const cx  = lane.collectible.frac * W;
-      const bob = Math.sin(this.f * 0.09 + cx) * 4;
-      const icons = ['💰','📄','📰','🦐','🪶','💰'];
-      ctx.font = `${H * 0.55}px serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(icons[Math.floor(cx / 80) % icons.length], cx, topY + H/2 + bob - 4);
-    }
   }
 
   _roadLines(lane, topY, H) {
@@ -1030,12 +1025,16 @@ class Game {
     this.rnd.drawSky(this.score);
 
     const ctx = this.rnd.ctx;
-    // Apply a single skew to the whole scene for the side-angle perspective.
-    // ctx.transform(a,b,c,d,e,f): we use (1, 0, CAM_SKEW, 1, 0, 0)
-    // This shifts x by CAM_SKEW * y — lanes near bottom of screen lean right,
-    // lanes at top lean left, giving the front-left viewing angle.
+    const H   = this.rnd.H;
+    const W   = this.rnd.W;
+
+    // Isometric-style perspective: shear Y axis so the right side of the screen
+    // appears higher (further away). This is ctx.transform(a,b,c,d,e,f) where:
+    //   a=1, b=SKEW (y shifts up as x increases), c=0, d=1
+    //   e=0, f=-SKEW*W*0.5 (re-center so middle of screen stays put)
+    const SKEW = 0.20;
     ctx.save();
-    ctx.transform(1, 0, CFG.CAM_SKEW, 1, -CFG.CAM_SKEW * this.rnd.H * 0.5, 0);
+    ctx.transform(1, -SKEW, 0, 1, 0, SKEW * W * 0.5);
 
     const sorted = [...this.wld.lanes].sort((a,b) => b.worldRow - a.worldRow);
     sorted.forEach(lane => {
@@ -1048,8 +1047,6 @@ class Game {
     this.rnd.drawPlayer(this.plr, this.char, this.wld);
 
     ctx.restore();
-
-    // PM character draws in screen space (no skew)
     this.rnd.drawPM(this.pmChar);
   }
 
@@ -1080,16 +1077,6 @@ class Game {
             this._die(c[lane.obType]||'an obstacle');
           }
         });
-      }
-
-      if (lane.collectible && !lane.collectible.collected) {
-        const cx=lane.collectible.frac*this.rnd.W;
-        if(Math.abs(px-cx)<CFG.LANE_H*0.7){
-          lane.collectible.collected=true;
-          const topY=this.wld.laneScreenY(row,this.rnd.H);
-          this._burst(px, topY+CFG.LANE_H/2, '#ffdd00', 12);
-          this.ui.collectible();
-        }
       }
     });
 
